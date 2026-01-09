@@ -97,7 +97,7 @@ func (s ParcelService) Delete(number int) error {
 }
 
 func main() {
-	// настройте подключение к БД
+	// настройка подключения к БД
 
 	store := // создайте объект ParcelStore функцией NewParcelStore
 	service := NewParcelService(store)
