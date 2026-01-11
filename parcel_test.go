@@ -16,25 +16,9 @@ var (
 	randRange = rand.New(randSource)
 )
 
-// getTestParcel возвращает тестовую посылку
-func getTestParcel() Parcel {
-	return Parcel{
-		Client:    1000,
-		Status:    ParcelStatusRegistered,
-		Address:   "test",
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-}
-
-// TestAddGetDelete проверяет добавление, получение и удаление посылки
-func TestAddGetDelete(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("Ошибка при подключению к БД: %v", err)
-	}
-	defer db.Close()
-
-	_, err = db.Exec(`
+// Создание таблицы parcel для использования в тестах
+func createTable(db *sql.DB, t *testing.T) {
+	_, err := db.Exec(`
         CREATE TABLE parcel (
             number INTEGER PRIMARY KEY AUTOINCREMENT,
             client INTEGER NOT NULL,
@@ -46,9 +30,41 @@ func TestAddGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка при создании таблицы: %v", err)
 	}
+}
 
+// getTestParcel возвращает тестовую посылку
+func getTestParcel() Parcel {
+	return Parcel{
+		Client:    1000,
+		Status:    ParcelStatusRegistered,
+		Address:   "test",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// Функция для создания тестовой базы данных в памяти - для соблюдения чистоты записей
+func setupTest(t *testing.T) (*sql.DB, ParcelStore, Parcel) {
+	// Создаем временную базу данных
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Ошибка при подключении к БД: %v", err)
+	}
+
+	// Создаем таблицу
+	createTable(db, t)
+
+	// Инициализируем хранилище и тестовую посылку
 	store := NewParcelStore(db)
 	parcel := getTestParcel()
+
+	return db, store, parcel
+}
+
+// TestAddGetDelete проверяет добавление, получение и удаление посылки
+func TestAddGetDelete(t *testing.T) {
+	// Инициализация тестовой среды
+	db, store, parcel := setupTest(t)
+	defer db.Close()
 
 	id, err := store.Add(parcel)
 	if err != nil {
@@ -82,27 +98,9 @@ func TestAddGetDelete(t *testing.T) {
 
 // TestSetAddress проверяет обновление адреса
 func TestSetAddress(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("Ошибка при подключении к БД: %v", err)
-	}
+	// Инициализация тестовой среды
+	db, store, parcel := setupTest(t)
 	defer db.Close()
-
-	_, err = db.Exec(`
-        CREATE TABLE parcel (
-            number INTEGER PRIMARY KEY AUTOINCREMENT,
-            client INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            address TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    `)
-	if err != nil {
-		t.Fatalf("Ошибка при создании таблицы: %v", err)
-	}
-
-	store := NewParcelStore(db)
-	parcel := getTestParcel()
 
 	id, err := store.Add(parcel)
 	if err != nil {
@@ -130,17 +128,13 @@ func TestSetAddress(t *testing.T) {
 
 // TestSetStatus проверяет обновление статуса
 func TestSetStatus(t *testing.T) {
-	// prepare
-	db, err := sql.Open("sqlite", "tracker.db") // настройте подключение к БД
-	if err != nil {
-		t.Errorf("Ошибка при подключении к БД: %v", err)
-	}
+	// Инициализация тестовой среды
+	db, store, parcel := setupTest(t)
 	defer db.Close()
-	store := NewParcelStore(db)
+
 	service := NewParcelService(store)
-	parcel := getTestParcel()
+
 	// add
-	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
 	id, err := store.Add(parcel)
 	if err != nil {
 		t.Errorf("Ошибка при добавлении посылки: %v", err)
@@ -149,24 +143,23 @@ func TestSetStatus(t *testing.T) {
 		t.Errorf("Идентификатор посылки равен 0")
 	}
 
-	// Переход к следующему статусу
+	// Первый вызов NextStatus (registered -> sent)
 	err = service.NextStatus(id)
 	if err != nil {
 		t.Errorf("Ошибка при обновлении статуса: %v", err)
 	}
 
-	// check
 	updatedParcel, err := store.Get(id)
 	if err != nil {
 		t.Errorf("Ошибка при получении посылки: %v", err)
 	} else {
-		expectedStatus := ParcelStatusSent // Ожидаемый статус после первого вызова NextStatus
+		expectedStatus := ParcelStatusSent
 		if updatedParcel.Status != expectedStatus {
 			t.Errorf("Статус не обновился. Ожидалось %s, получено %s", expectedStatus, updatedParcel.Status)
 		}
 	}
 
-	// Проверка второго перехода статуса
+	// Второй вызов NextStatus (sent -> delivered)
 	err = service.NextStatus(id)
 	if err != nil {
 		t.Errorf("Ошибка при обновлении статуса: %v", err)
@@ -176,13 +169,13 @@ func TestSetStatus(t *testing.T) {
 	if err != nil {
 		t.Errorf("Ошибка при получении посылки: %v", err)
 	} else {
-		expectedStatus := ParcelStatusDelivered // Ожидаемый статус после второго вызова NextStatus
+		expectedStatus := ParcelStatusDelivered
 		if updatedParcel.Status != expectedStatus {
 			t.Errorf("Статус не обновился. Ожидалось %s, получено %s", expectedStatus, updatedParcel.Status)
 		}
 	}
 
-	// Проверка третьего вызова (статус уже delivered)
+	// Третий вызов NextStatus (delivered -> без изменений)
 	err = service.NextStatus(id)
 	if err != nil {
 		t.Errorf("Ошибка при обновлении статуса: %v", err)
@@ -192,7 +185,7 @@ func TestSetStatus(t *testing.T) {
 	if err != nil {
 		t.Errorf("Ошибка при получении посылки: %v", err)
 	} else {
-		expectedStatus := ParcelStatusDelivered // Статус не должен измениться
+		expectedStatus := ParcelStatusDelivered
 		if updatedParcel.Status != expectedStatus {
 			t.Errorf("Статус неожиданно изменился. Ожидалось %s, получено %s", expectedStatus, updatedParcel.Status)
 		}
@@ -201,26 +194,9 @@ func TestSetStatus(t *testing.T) {
 
 // TestGetByClient проверяет получение посылок по идентификатору клиента
 func TestGetByClient(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("Ошибка при подключению к БД: %v", err)
-	}
+	// Инициализация тестовой среды
+	db, store, _ := setupTest(t)
 	defer db.Close()
-
-	_, err = db.Exec(`
-        CREATE TABLE parcel (
-            number INTEGER PRIMARY KEY AUTOINCREMENT,
-            client INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            address TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    `)
-	if err != nil {
-		t.Fatalf("Ошибка при создании таблицы: %v", err)
-	}
-
-	store := NewParcelStore(db)
 
 	parcels := []Parcel{
 		getTestParcel(),
