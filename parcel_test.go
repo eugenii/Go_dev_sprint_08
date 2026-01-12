@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,6 +19,20 @@ var (
 	randRange = rand.New(randSource)
 )
 
+// Создание таблицы parcel для использования в тестах
+func createTable(db *sql.DB, t *testing.T) {
+	_, err := db.Exec(`
+        CREATE TABLE parcel (
+            number INTEGER PRIMARY KEY AUTOINCREMENT,
+            client INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            address TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    `)
+	require.NoError(t, err, "Ошибка при создании таблицы")
+}
+
 // getTestParcel возвращает тестовую посылку
 func getTestParcel() Parcel {
 	return Parcel{
@@ -28,94 +43,206 @@ func getTestParcel() Parcel {
 	}
 }
 
-// TestAddGetDelete проверяет добавление, получение и удаление посылки
-func TestAddGetDelete(t *testing.T) {
-	// prepare
-	db, err := // настройте подключение к БД
+// Функция для создания тестовой базы данных в памяти - для соблюдения чистоты записей
+func setupTest(t *testing.T) (*sql.DB, ParcelStore, Parcel) {
+	// Создаем временную базу данных
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err, "Ошибка подключения к БД")
+
+	// Создаем таблицу
+	createTable(db, t)
+
+	// Инициализируем хранилище и тестовую посылку
 	store := NewParcelStore(db)
 	parcel := getTestParcel()
 
+	return db, store, parcel
+}
+
+// TestAddGetDelete проверяет добавление, получение и удаление посылки
+func TestAddGetDelete(t *testing.T) {
+	db, store, parcel := setupTest(t)
+	defer db.Close()
+
 	// add
-	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
+	id, err := store.Add(parcel)
+	require.NoError(t, err, "Ошибка при добавлении посылки")
+	require.Greater(t, id, 0, "Идентификатор посылки должен быть больше 0")
 
 	// get
-	// получите только что добавленную посылку, убедитесь в отсутствии ошибки
-	// проверьте, что значения всех полей в полученном объекте совпадают со значениями полей в переменной parcel
+	retrievedParcel, err := store.Get(id)
+	require.NoError(t, err, "Ошибка при получении посылки")
+
+	// Проверяем поля
+	assert.Equal(t, id, retrievedParcel.Number, "Номер посылки не совпадает")
+	assert.Equal(t, parcel.Client, retrievedParcel.Client, "Клиент не совпадает")
+	assert.Equal(t, parcel.Status, retrievedParcel.Status, "Статус не совпадает")
+	assert.Equal(t, parcel.Address, retrievedParcel.Address, "Адрес не совпадает")
+	assert.Equal(t, parcel.CreatedAt, retrievedParcel.CreatedAt, "Дата создания не совпадает")
 
 	// delete
-	// удалите добавленную посылку, убедитесь в отсутствии ошибки
-	// проверьте, что посылку больше нельзя получить из БД
+	err = store.Delete(id)
+	require.NoError(t, err, "Ошибка при удалении посылки")
+
+	// Проверяем, что посылка удалена
+	_, err = store.Get(id)
+	require.ErrorIs(t, err, sql.ErrNoRows, "Ожидалась ошибка sql.ErrNoRows после удаления посылки")
 }
 
 // TestSetAddress проверяет обновление адреса
 func TestSetAddress(t *testing.T) {
-	// prepare
-	db, err := // настройте подключение к БД
+	// Инициализация тестовой среды
+	db, store, parcel := setupTest(t)
+	defer db.Close()
 
-	// add
-	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
+	id, err := store.Add(parcel)
+	if err != nil {
+		t.Errorf("Ошибка при добавлении посылки: %v", err)
+	}
+	if id == 0 {
+		t.Errorf("Идентификатор посылки равен 0")
+	}
 
-	// set address
-	// обновите адрес, убедитесь в отсутствии ошибки
 	newAddress := "new test address"
+	err = store.SetAddress(id, newAddress)
+	if err != nil {
+		t.Errorf("Ошибка при обновлении адреса: %v", err)
+	}
 
-	// check
-	// получите добавленную посылку и убедитесь, что адрес обновился
+	updatedParcel, err := store.Get(id)
+	if err != nil {
+		t.Errorf("Ошибка при получении посылки: %v", err)
+	} else {
+		if updatedParcel.Address != newAddress {
+			t.Errorf("Адрес не обновился. Ожидалось %s, получено %s", newAddress, updatedParcel.Address)
+		}
+	}
 }
 
 // TestSetStatus проверяет обновление статуса
 func TestSetStatus(t *testing.T) {
-	// prepare
-	db, err := // настройте подключение к БД
+	// Инициализация тестовой среды
+	db, store, parcel := setupTest(t)
+	defer db.Close()
+
+	service := NewParcelService(store)
 
 	// add
-	// добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
+	id, err := store.Add(parcel)
+	if err != nil {
+		t.Errorf("Ошибка при добавлении посылки: %v", err)
+	}
+	if id == 0 {
+		t.Errorf("Идентификатор посылки равен 0")
+	}
 
-	// set status
-	// обновите статус, убедитесь в отсутствии ошибки
+	// Первый вызов NextStatus (registered -> sent)
+	err = service.NextStatus(id)
+	if err != nil {
+		t.Errorf("Ошибка при обновлении статуса: %v", err)
+	}
 
-	// check
-	// получите добавленную посылку и убедитесь, что статус обновился
+	updatedParcel, err := store.Get(id)
+	if err != nil {
+		t.Errorf("Ошибка при получении посылки: %v", err)
+	} else {
+		expectedStatus := ParcelStatusSent
+		if updatedParcel.Status != expectedStatus {
+			t.Errorf("Статус не обновился. Ожидалось %s, получено %s", expectedStatus, updatedParcel.Status)
+		}
+	}
+
+	// Второй вызов NextStatus (sent -> delivered)
+	err = service.NextStatus(id)
+	if err != nil {
+		t.Errorf("Ошибка при обновлении статуса: %v", err)
+	}
+
+	updatedParcel, err = store.Get(id)
+	if err != nil {
+		t.Errorf("Ошибка при получении посылки: %v", err)
+	} else {
+		expectedStatus := ParcelStatusDelivered
+		if updatedParcel.Status != expectedStatus {
+			t.Errorf("Статус не обновился. Ожидалось %s, получено %s", expectedStatus, updatedParcel.Status)
+		}
+	}
+
+	// Третий вызов NextStatus (delivered -> без изменений)
+	err = service.NextStatus(id)
+	if err != nil {
+		t.Errorf("Ошибка при обновлении статуса: %v", err)
+	}
+
+	updatedParcel, err = store.Get(id)
+	if err != nil {
+		t.Errorf("Ошибка при получении посылки: %v", err)
+	} else {
+		expectedStatus := ParcelStatusDelivered
+		if updatedParcel.Status != expectedStatus {
+			t.Errorf("Статус неожиданно изменился. Ожидалось %s, получено %s", expectedStatus, updatedParcel.Status)
+		}
+	}
 }
 
 // TestGetByClient проверяет получение посылок по идентификатору клиента
 func TestGetByClient(t *testing.T) {
-	// prepare
-	db, err := // настройте подключение к БД
+	// Инициализация тестовой среды
+	db, store, _ := setupTest(t)
+	defer db.Close()
 
 	parcels := []Parcel{
 		getTestParcel(),
 		getTestParcel(),
 		getTestParcel(),
 	}
-	parcelMap := map[int]Parcel{}
+	parcelMap := make(map[int]Parcel)
 
-	// задаём всем посылкам один и тот же идентификатор клиента
 	client := randRange.Intn(10_000_000)
-	parcels[0].Client = client
-	parcels[1].Client = client
-	parcels[2].Client = client
+	for i := range parcels {
+		parcels[i].Client = client
+	}
 
-	// add
-	for i := 0; i < len(parcels); i++ {
-		id, err := // добавьте новую посылку в БД, убедитесь в отсутствии ошибки и наличии идентификатора
+	for i := range parcels {
+		id, err := store.Add(parcels[i])
+		if err != nil {
+			t.Errorf("Ошибка при добавлении посылки: %v", err)
+		}
+		if id == 0 {
+			t.Errorf("Идентификатор посылки равен 0")
+		}
 
-		// обновляем идентификатор добавленной у посылки
 		parcels[i].Number = id
-
-		// сохраняем добавленную посылку в структуру map, чтобы её можно было легко достать по идентификатору посылки
 		parcelMap[id] = parcels[i]
 	}
 
-	// get by client
-	storedParcels, err := // получите список посылок по идентификатору клиента, сохранённого в переменной client
-	// убедитесь в отсутствии ошибки
-	// убедитесь, что количество полученных посылок совпадает с количеством добавленных
+	storedParcels, err := store.GetByClient(client)
+	if err != nil {
+		t.Errorf("Ошибка при получении посылок: %v", err)
+	}
 
-	// check
-	for _, parcel := range storedParcels {
-		// в parcelMap лежат добавленные посылки, ключ - идентификатор посылки, значение - сама посылка
-		// убедитесь, что все посылки из storedParcels есть в parcelMap
-		// убедитесь, что значения полей полученных посылок заполнены верно
+	if len(storedParcels) != len(parcels) {
+		t.Errorf("Количество полученных посылок (%d) не совпадает с количеством добавленных (%d)", len(storedParcels), len(parcels))
+	}
+
+	for _, storedParcel := range storedParcels {
+		expectedParcel, exists := parcelMap[storedParcel.Number]
+		if !exists {
+			t.Errorf("Посылка с номером %d не найдена среди добавленных", storedParcel.Number)
+			continue
+		}
+
+		if storedParcel.Client != expectedParcel.Client {
+			t.Errorf("Неверный клиент: ожидалось %d, получено %d", expectedParcel.Client, storedParcel.Client)
+		}
+		if storedParcel.Status != expectedParcel.Status {
+			t.Errorf("Неверный статус: ожидалось %s, получено %s", expectedParcel.Status, storedParcel.Status)
+		}
+		if storedParcel.Address != expectedParcel.Address {
+			t.Errorf("Неверный адрес: ожидалось %s, получено %s", expectedParcel.Address, storedParcel.Address)
+		}
+		if storedParcel.CreatedAt != expectedParcel.CreatedAt {
+			t.Errorf("Неверная дата создания: ожидалось %s, получено %s", expectedParcel.CreatedAt, storedParcel.CreatedAt)
+		}
 	}
 }
