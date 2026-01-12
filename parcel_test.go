@@ -5,6 +5,9 @@ import (
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -27,9 +30,7 @@ func createTable(db *sql.DB, t *testing.T) {
             created_at TEXT NOT NULL
         )
     `)
-	if err != nil {
-		t.Fatalf("Ошибка при создании таблицы: %v", err)
-	}
+	require.NoError(t, err, "Ошибка при создании таблицы")
 }
 
 // getTestParcel возвращает тестовую посылку
@@ -46,9 +47,7 @@ func getTestParcel() Parcel {
 func setupTest(t *testing.T) (*sql.DB, ParcelStore, Parcel) {
 	// Создаем временную базу данных
 	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("Ошибка при подключении к БД: %v", err)
-	}
+	require.NoError(t, err, "Ошибка подключения к БД")
 
 	// Создаем таблицу
 	createTable(db, t)
@@ -62,38 +61,32 @@ func setupTest(t *testing.T) (*sql.DB, ParcelStore, Parcel) {
 
 // TestAddGetDelete проверяет добавление, получение и удаление посылки
 func TestAddGetDelete(t *testing.T) {
-	// Инициализация тестовой среды
 	db, store, parcel := setupTest(t)
 	defer db.Close()
 
+	// add
 	id, err := store.Add(parcel)
-	if err != nil {
-		t.Errorf("Ошибка при добавлении посылки: %v", err)
-	}
-	if id == 0 {
-		t.Errorf("Идентификатор посылки равен 0")
-	}
+	require.NoError(t, err, "Ошибка при добавлении посылки")
+	require.Greater(t, id, 0, "Идентификатор посылки должен быть больше 0")
 
+	// get
 	retrievedParcel, err := store.Get(id)
-	if err != nil {
-		t.Errorf("Ошибка при получении посылки: %v", err)
-	}
+	require.NoError(t, err, "Ошибка при получении посылки")
 
-	if retrievedParcel.Number != id {
-		t.Errorf("Неверный номер посылки: ожидалось %d, получено %d", id, retrievedParcel.Number)
-	}
+	// Проверяем поля
+	assert.Equal(t, id, retrievedParcel.Number, "Номер посылки не совпадает")
+	assert.Equal(t, parcel.Client, retrievedParcel.Client, "Клиент не совпадает")
+	assert.Equal(t, parcel.Status, retrievedParcel.Status, "Статус не совпадает")
+	assert.Equal(t, parcel.Address, retrievedParcel.Address, "Адрес не совпадает")
+	assert.Equal(t, parcel.CreatedAt, retrievedParcel.CreatedAt, "Дата создания не совпадает")
 
+	// delete
 	err = store.Delete(id)
-	if err != nil {
-		t.Errorf("Ошибка при удалении посылки: %v", err)
-	}
+	require.NoError(t, err, "Ошибка при удалении посылки")
 
+	// Проверяем, что посылка удалена
 	_, err = store.Get(id)
-	if err == nil {
-		t.Errorf("Посылка всё ещё существует после удаления")
-	} else if err != sql.ErrNoRows {
-		t.Errorf("Неверная ошибка при попытке получения удаленной посылки: ожидалось sql.ErrNoRows, получено '%v'", err)
-	}
+	require.ErrorIs(t, err, sql.ErrNoRows, "Ожидалась ошибка sql.ErrNoRows после удаления посылки")
 }
 
 // TestSetAddress проверяет обновление адреса

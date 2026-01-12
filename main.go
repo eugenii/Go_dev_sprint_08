@@ -103,6 +103,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
+	defer db.Close()
 
 	store := NewParcelStore(db) // Oбъект ParcelStore
 	service := NewParcelService(store)
